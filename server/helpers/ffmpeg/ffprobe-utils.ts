@@ -106,14 +106,15 @@ function computeResolutionsToTranscode (options: {
   const resolutionsEnabled = new Set<number>()
 
   // Put in the order we want to proceed jobs
+  // TODO: allow configuring this priority via admin panel
   const availableResolutions: VideoResolution[] = [
     VideoResolution.H_NOVIDEO,
+    VideoResolution.H_720P,
+    VideoResolution.H_1080P,
     VideoResolution.H_480P,
     VideoResolution.H_360P,
-    VideoResolution.H_720P,
     VideoResolution.H_240P,
     VideoResolution.H_144P,
-    VideoResolution.H_1080P,
     VideoResolution.H_1440P,
     VideoResolution.H_4K
   ]

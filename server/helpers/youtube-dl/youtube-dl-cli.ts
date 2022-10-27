@@ -6,12 +6,48 @@ import { VideoResolution } from '@shared/models'
 import { logger, loggerTagsFactory } from '../logger'
 import { getProxy, isProxyEnabled } from '../proxy'
 import { isBinaryResponse, peertubeGot } from '../requests'
+import { YoutubeDLCLICrashError, YoutubeDLCLIExecError, YoutubeDLCLIRetCodeError } from './youtube-dl-errors'
+import _ from 'lodash'
 
 const lTags = loggerTagsFactory('youtube-dl')
 
 const youtubeDLBinaryPath = join(CONFIG.STORAGE.BIN_DIR, CONFIG.IMPORT.VIDEOS.HTTP.YOUTUBE_DL_RELEASE.NAME)
 
-export class YoutubeDLCLI {
+type YoutubeDLCLIResult = {
+  title?: string
+  description?: string
+  categories?: string[]
+  license?: string
+  language?: string
+  age_limit?: number
+  tags?: string[]
+  thumbnail?: string
+  url?: string
+  urls?: string[] | string
+  // TODO: structure for formats
+  formats?: any[]
+  // TODO: structure for thumbnails
+  thumbnails?: any[]
+  // TODO: structure for subtitles
+  subtitles?: any[]
+  upload_date?: string
+  ext: string
+  webpage_url: string
+  is_live?: boolean
+  ie_key?: string
+  duration?: number
+  timestamp?: number
+  release_timestamp?: number
+}
+
+enum YoutubeDLCLIRetCode {
+  OKAY = 0,
+  DOWNLOAD_ERROR = 1,
+  DOWNLOAD_CANCELLED = 101,
+  PARSE_ERROR = 2,
+}
+
+class YoutubeDLCLI {
 
   static async safeGet () {
     if (!await pathExists(youtubeDLBinaryPath)) {
@@ -24,6 +60,7 @@ export class YoutubeDLCLI {
   }
 
   static async updateYoutubeDLBinary () {
+    // TODO: chain of trust, hash sum
     const url = CONFIG.IMPORT.VIDEOS.HTTP.YOUTUBE_DL_RELEASE.URL
 
     logger.info('Updating youtubeDL binary from %s.', url, lTags())
@@ -74,7 +111,7 @@ export class YoutubeDLCLI {
 
     if (!useBestFormat) {
       const resolution = enabledResolutions.length === 0
-        ? VideoResolution.H_720P
+        ? VideoResolution.H_1080P
         : Math.max(...enabledResolutions)
 
       result = [
@@ -105,7 +142,12 @@ export class YoutubeDLCLI {
     additionalYoutubeDLArgs?: string[]
   }) {
     let args = options.additionalYoutubeDLArgs || []
-    args = args.concat([ '--merge-output-format', 'mp4', '-f', options.format, '-o', options.output ])
+    args = args.concat([
+      '-S', 'br,res,fps',
+      '--merge-output-format', 'mp4',
+      '-f', options.format,
+      '-o', options.output
+    ])
 
     return this.run({
       url: options.url,
@@ -120,13 +162,73 @@ export class YoutubeDLCLI {
     format: string
     processOptions: execa.NodeOptions
     additionalYoutubeDLArgs?: string[]
-  }) {
+  }): Promise<YoutubeDLCLIResult | YoutubeDLCLIResult[]> {
     const { url, format, additionalYoutubeDLArgs = [], processOptions } = options
 
-    const completeArgs = additionalYoutubeDLArgs.concat([ '--dump-json', '-f', format ])
+     // Command line flags/features only supported by yt-dlp
+     if (CONFIG.IMPORT.VIDEOS.HTTP.YOUTUBE_DL_RELEASE.NAME === 'yt-dlp') {
+      // Filter out live chat from subtitles and ignore DASH and HLS to reduce JSON-LD output size
+      additionalYoutubeDLArgs.push(
+        '--compat-options', 'no-live-chat',
+        '--extractor-args', 'youtube:skip=dash,hls'
+      )
 
-    const data = await this.run({ url, args: completeArgs, processOptions })
-    if (!data) return undefined
+      // Sort 'best' format fallback presedence
+      // Highest resolution, highest bitrate, highest FPS
+      additionalYoutubeDLArgs.push(
+        '-S res,br,fps'
+      )
+
+      // TODO: check for presence of -O and only push if not exists
+      const fieldsToInclude = [
+        'title',
+        'description',
+        'subtitles',
+        'webpage_url',
+        'live_status',
+        'upload_date',
+        'thumbnail',
+        'language',
+        'age_limit',
+        'license',
+        'categories',
+        'tags',
+        'ext'
+      ]
+
+      // Reduce JSON-LD output, megabytes of DASH data for long livestreams otherwise
+      additionalYoutubeDLArgs.push('-O', `%(.{${fieldsToInclude.join(',')}})j`)
+
+      const formatFields = [
+        'height',
+        'audio_channels',
+        'url',
+        'ext',
+        'vcodec',
+        'acodec'
+      ]
+
+      // Include only the format data needed for validation
+      additionalYoutubeDLArgs.push('-O', `%(requested_formats.:.{${formatFields.join(',')}})j`)
+
+      // --compat-options no-live-chat --extractor-args "youtube:skip=dash,hls" -O '%(.{subtitles,webpage_url,live_status,upload_date,requested_formats,thumbnail,language,age_limit,license,categories,description,title,tags,ext})j'
+    }
+
+    const completeArgs = additionalYoutubeDLArgs.concat([ '-f', format ])
+
+    let data: string[]
+
+    try {
+      data = await this.run({ url, args: completeArgs, processOptions })
+    } catch (err) {
+      logger.error('error during youtube-dl execution', lTags())
+      return undefined
+    }
+
+    if (!data) {
+      logger.error('no data from youtube-dl', lTags())
+      return undefined
+    }
 
     const info = data.map(d => JSON.parse(d))
 
@@ -139,29 +241,77 @@ export class YoutubeDLCLI {
     url: string
     latestVideosCount?: number
     processOptions: execa.NodeOptions
-  }): Promise<{ upload_date: string, webpage_url: string }[]> {
+  }): Promise<Partial<YoutubeDLCLIResult>[]> {
     const additionalYoutubeDLArgs = [ '--skip-download', '--playlist-reverse' ]
-
-    if (CONFIG.IMPORT.VIDEOS.HTTP.YOUTUBE_DL_RELEASE.NAME === 'yt-dlp') {
-      // Optimize listing videos only when using yt-dlp because it is bugged with youtube-dl when fetching a channel
-      additionalYoutubeDLArgs.push('--flat-playlist')
-    }
 
     if (options.latestVideosCount !== undefined) {
       additionalYoutubeDLArgs.push('--playlist-end', options.latestVideosCount.toString())
     }
 
-    const result = await this.getInfo({
+    let flatList = [] as Partial<YoutubeDLCLIResult>[]
+
+    // yt-dlp supports more data extraction and filtering
+    if (CONFIG.IMPORT.VIDEOS.HTTP.YOUTUBE_DL_RELEASE.NAME === 'yt-dlp') {
+      // filter out unavailable videos
+      additionalYoutubeDLArgs.push(
+        '--compat-options', 'no-youtube-unavailable-videos',
+        '--match-filters',
+        '!is_live & live_status != is_upcoming & live_status != post_live'
+      )
+
+      // yt-dlp supports fetching extra time data only in flat playlist mode
+      const flatYoutubeDLArgs = additionalYoutubeDLArgs.concat(
+        '--flat-playlist',
+        '--extractor-args', 'youtubetab:approximate-date'
+      )
+
+      // Reduce output of flat playlist to only the values we're interested in
+      const flatYoutubeDLFields = [
+        'webpage_url',
+        'timestamp',
+        'release_timestamp'
+      ]
+      flatYoutubeDLArgs.push('-O', `%(.{${flatYoutubeDLFields.join(',')}})j`)
+
+      flatList = await this.getInfo({
+        url: options.url,
+        format: YoutubeDLCLI.getYoutubeDLVideoFormat([], false),
+        processOptions: options.processOptions,
+        additionalYoutubeDLArgs: flatYoutubeDLArgs
+      }) as Partial<YoutubeDLCLIResult>[]
+
+      // Reduce output of regular playlist to only the values we're interested in
+      additionalYoutubeDLArgs.push('-O', '%(.{webpage_url,live_status})j')
+    }
+
+    const list = await this.getInfo({
       url: options.url,
       format: YoutubeDLCLI.getYoutubeDLVideoFormat([], false),
       processOptions: options.processOptions,
       additionalYoutubeDLArgs
-    })
+    }) as Partial<YoutubeDLCLIResult>[]
 
-    if (!result) return result
-    if (!Array.isArray(result)) return [ result ]
+    // Deep-copy merge
+    if (flatList.length > 0) {
+      // result = Object.values(_.merge(
+      //   _.keyBy(list, 'webpage_url'),
+      //   _.keyBy(flatList, 'webpage_url')
+      // ))
+      const result = list.map((item) => {
+        const flatItem = flatList.find(o => o.webpage_url == item.webpage_url)
+        if (flatItem?.timestamp > 0) {
+          item.timestamp = flatItem.timestamp
+        }
+        if (flatItem?.release_timestamp > 0) {
+          item.release_timestamp = flatItem.release_timestamp
+        }
+        return item
+      })
 
-    return result
+      return result
+    }
+
+    return list
   }
 
   async getSubs (options: {
@@ -212,6 +362,18 @@ export class YoutubeDLCLI {
 
     logger.debug('Run youtube-dl command.', { command: output.command, ...lTags() })
 
+    if (!output) {
+      throw new YoutubeDLCLIExecError(url)
+    }
+
+    if (output.exitCode != YoutubeDLCLIRetCode.OKAY) {
+      throw new YoutubeDLCLIRetCodeError(output.exitCode, url)
+    }
+
+    if (output.stderr.length > 0) {
+      throw new YoutubeDLCLICrashError(output.stderr, url)
+    }
+
     return output.stdout
       ? output.stdout.trim().split(/\r?\n/)
       : undefined
@@ -246,4 +408,11 @@ export class YoutubeDLCLI {
 
     return args
   }
+}
+
+// ---------------------------------------------------------------------------
+
+export {
+  YoutubeDLCLIResult,
+  YoutubeDLCLI
 }

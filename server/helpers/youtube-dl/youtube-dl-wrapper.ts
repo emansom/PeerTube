@@ -5,16 +5,13 @@ import { CONFIG } from '@server/initializers/config'
 import { isVideoFileExtnameValid } from '../custom-validators/videos'
 import { logger, loggerTagsFactory } from '../logger'
 import { generateVideoImportTmpPath } from '../utils'
-import { YoutubeDLCLI } from './youtube-dl-cli'
+import { YoutubeDLCLI, YoutubeDLCLIResult } from './youtube-dl-cli'
 import { YoutubeDLInfo, YoutubeDLInfoBuilder } from './youtube-dl-info-builder'
+import { YoutubeDLListBuilder } from './youtube-dl-list-builder'
+import { YoutubeDLSubs } from './youtube-dl-subs'
+import { YoutubeDLIsLiveError, YoutubeDLNoFormatsError, YoutubeDLNoInfoError } from './youtube-dl-errors'
 
 const lTags = loggerTagsFactory('youtube-dl')
-
-export type YoutubeDLSubs = {
-  language: string
-  filename: string
-  path: string
-}[]
 
 const processOptions = {
   maxBuffer: 1024 * 1024 * 30 // 30MB
@@ -38,31 +35,45 @@ class YoutubeDLWrapper {
       format: YoutubeDLCLI.getYoutubeDLVideoFormat(this.enabledResolutions, this.useBestFormat),
       additionalYoutubeDLArgs: youtubeDLArgs,
       processOptions
-    })
+    }) as YoutubeDLCLIResult
 
-    if (!info) throw new Error(`YoutubeDL could not get info from ${this.url}`)
+    if (!info) throw new YoutubeDLNoInfoError(this.url)
 
-    if (info.is_live === true) throw new Error('Cannot download a live streaming.')
+    const builder = new YoutubeDLInfoBuilder(info)
+    const serializedInfo = builder.getInfo()
 
-    const infoBuilder = new YoutubeDLInfoBuilder(info)
+    if (serializedInfo.isLive === true) {
+      throw new YoutubeDLIsLiveError(serializedInfo.webpageUrl)
+    }
 
-    return infoBuilder.getInfo()
+    if (serializedInfo.formats.length === 0) {
+      throw new YoutubeDLNoFormatsError(serializedInfo.webpageUrl)
+    }
+
+    return serializedInfo
   }
 
   async getInfoForListImport (options: {
     latestVideosCount?: number
-  }) {
+  }): Promise<string[]> {
     const youtubeDL = await YoutubeDLCLI.safeGet()
 
     const list = await youtubeDL.getListInfo({
       url: this.url,
       latestVideosCount: options.latestVideosCount,
       processOptions
-    })
+    }) as YoutubeDLCLIResult[]
+
+    if (list.length === 0) throw new Error(`YoutubeDL could not get info from ${this.url}`)
 
     if (!Array.isArray(list)) throw new Error(`YoutubeDL could not get list info from ${this.url}: ${inspect(list)}`)
 
-    return list.map(info => info.webpage_url)
+    const builder = new YoutubeDLListBuilder(list)
+    const serializedList = builder.getList()
+
+    const filteredList = this.filterUnavailable(serializedList)
+
+    return filteredList.map(info => info.webpageUrl)
   }
 
   async getSubtitles (): Promise<YoutubeDLSubs> {
@@ -144,6 +155,21 @@ class YoutubeDLWrapper {
     const directoryContent = await readdir(dirname(tmpPath))
 
     throw new Error(`Cannot guess path of ${tmpPath}. Directory content: ${directoryContent.join(', ')}`)
+  }
+
+  private filterUnavailable(list: Partial<YoutubeDLInfo>[]): Partial<YoutubeDLInfo>[] {
+    const now = Math.floor(Date.now() / 1000)
+
+    return list.filter(item => {
+      const toBePremiered = item.release_timestamp > now
+
+      // filter out videos that haven't premiered yet
+      if (toBePremiered) {
+        return false
+      }
+
+      return true
+    })
   }
 }
 

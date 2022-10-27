@@ -1,6 +1,8 @@
 import { CONSTRAINTS_FIELDS, VIDEO_CATEGORIES, VIDEO_LANGUAGES, VIDEO_LICENCES } from '../../initializers/constants'
 import { peertubeTruncate } from '../core-utils'
 import { isUrlValid } from '../custom-validators/activitypub/misc'
+import { YoutubeDLBaseBuilder } from './youtube-dl-base-builder'
+import { YoutubeDLCLIResult } from './youtube-dl-cli'
 
 type YoutubeDLInfo = {
   name?: string
@@ -14,14 +16,18 @@ type YoutubeDLInfo = {
   ext?: string
   originallyPublishedAtWithoutTime?: Date
   webpageUrl?: string
-
   urls?: string[]
+  formats?: any[]
+  isLive?: boolean
+  timestamp?: number
+  release_timestamp?: number
 }
 
-class YoutubeDLInfoBuilder {
+class YoutubeDLInfoBuilder extends YoutubeDLBaseBuilder {
   private readonly info: any
 
   constructor (info: any) {
+    super()
     this.info = { ...info }
   }
 
@@ -32,26 +38,7 @@ class YoutubeDLInfoBuilder {
     return obj
   }
 
-  private normalizeObject (obj: any) {
-    const newObj: any = {}
-
-    for (const key of Object.keys(obj)) {
-      // Deprecated key
-      if (key === 'resolution') continue
-
-      const value = obj[key]
-
-      if (typeof value === 'string') {
-        newObj[key] = value.normalize()
-      } else {
-        newObj[key] = value
-      }
-    }
-
-    return newObj
-  }
-
-  private buildOriginallyPublishedAt (obj: any) {
+  private buildOriginallyPublishedAt (obj: any): Date {
     let originallyPublishedAt: Date = null
 
     const uploadDateMatcher = /^(\d{4})(\d{2})(\d{2})$/.exec(obj.upload_date)
@@ -70,8 +57,8 @@ class YoutubeDLInfoBuilder {
     return originallyPublishedAt
   }
 
-  private buildVideoInfo (obj: any): YoutubeDLInfo {
-    return {
+  private buildVideoInfo (obj: YoutubeDLCLIResult): YoutubeDLInfo {
+    const info: Partial<YoutubeDLInfo> = {
       name: this.titleTruncation(obj.title),
       description: this.descriptionTruncation(obj.description),
       category: this.getCategory(obj.categories),
@@ -81,17 +68,21 @@ class YoutubeDLInfoBuilder {
       tags: this.getTags(obj.tags),
       thumbnailUrl: obj.thumbnail || undefined,
       urls: this.buildAvailableUrl(obj),
+      formats: obj.formats || [],
       originallyPublishedAtWithoutTime: this.buildOriginallyPublishedAt(obj),
       ext: obj.ext,
       webpageUrl: obj.webpage_url
     }
+
+    return info
   }
 
-  private buildAvailableUrl (obj: any) {
+  private buildAvailableUrl (obj: YoutubeDLCLIResult): string[] {
     const urls: string[] = []
 
     if (obj.url) urls.push(obj.url)
     if (obj.urls) {
+      // TODO: split on \n next line
       if (Array.isArray(obj.urls)) urls.push(...obj.urls)
       else urls.push(obj.urls)
     }
@@ -132,7 +123,7 @@ class YoutubeDLInfoBuilder {
     return urls.filter(u => u && isUrlValid(u))
   }
 
-  private titleTruncation (title: string) {
+  private titleTruncation (title: string): string {
     return peertubeTruncate(title, {
       length: CONSTRAINTS_FIELDS.VIDEOS.NAME.max,
       separator: /,? +/,
@@ -140,7 +131,7 @@ class YoutubeDLInfoBuilder {
     })
   }
 
-  private descriptionTruncation (description: string) {
+  private descriptionTruncation (description: string): string {
     if (!description || description.length < CONSTRAINTS_FIELDS.VIDEOS.DESCRIPTION.min) return undefined
 
     return peertubeTruncate(description, {
@@ -150,11 +141,11 @@ class YoutubeDLInfoBuilder {
     })
   }
 
-  private isNSFW (info: any) {
-    return info?.age_limit >= 16
+  private isNSFW (info: YoutubeDLCLIResult): boolean {
+    return info.age_limit >= 16
   }
 
-  private getTags (tags: string[]) {
+  private getTags (tags: string[]): string[] {
     if (Array.isArray(tags) === false) return []
 
     return tags
@@ -163,7 +154,7 @@ class YoutubeDLInfoBuilder {
       .slice(0, 5)
   }
 
-  private getLicence (licence: string) {
+  private getLicence (licence: string): number | undefined {
     if (!licence) return undefined
 
     if (licence.includes('Creative Commons Attribution')) return 1
@@ -176,7 +167,7 @@ class YoutubeDLInfoBuilder {
     return undefined
   }
 
-  private getCategory (categories: string[]) {
+  private getCategory (categories: string[]): number | undefined {
     if (!categories) return undefined
 
     const categoryString = categories[0]
@@ -192,7 +183,7 @@ class YoutubeDLInfoBuilder {
     return undefined
   }
 
-  private getLanguage (language: string) {
+  private getLanguage (language: string): string | undefined {
     return VIDEO_LANGUAGES[language] ? language : undefined
   }
 }

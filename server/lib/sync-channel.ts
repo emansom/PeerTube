@@ -7,6 +7,7 @@ import { VideoImportModel } from '@server/models/video/video-import'
 import { MChannel, MChannelAccountDefault, MChannelSync } from '@server/types/models'
 import { VideoChannelSyncState, VideoPrivacy } from '@shared/models'
 import { CreateJobArgument, JobQueue } from './job-queue'
+import { lTags } from './object-storage/shared'
 import { ServerConfigManager } from './server-config-manager'
 
 export async function synchronizeChannel (options: {
@@ -32,7 +33,9 @@ export async function synchronizeChannel (options: {
       CONFIG.TRANSCODING.ALWAYS_TRANSCODE_ORIGINAL_RESOLUTION
     )
 
-    const targetUrls = await youtubeDL.getInfoForListImport({ latestVideosCount: videosCountLimit })
+    let targetUrls: string[]
+
+    targetUrls = await youtubeDL.getInfoForListImport({ latestVideosCount: videosCountLimit })
 
     logger.info(
       'Fetched %d candidate URLs for sync channel %s.',
@@ -48,10 +51,19 @@ export async function synchronizeChannel (options: {
       return
     }
 
-    const children: CreateJobArgument[] = []
+    const jobs: CreateJobArgument[] = []
 
     for (const targetUrl of targetUrls) {
-      if (await skipImport(channel, targetUrl, onlyAfter)) continue
+      let shouldSkip: boolean
+
+      try {
+        shouldSkip = await skipImport(channel, targetUrl, onlyAfter)
+      } catch (err) {
+        logger.error('Failed fetching info from URL %s', { targetUrl, err, ...lTags()})
+        continue
+      }
+
+      if (shouldSkip) continue
 
       const { job } = await buildYoutubeDLImport({
         user,
@@ -63,7 +75,12 @@ export async function synchronizeChannel (options: {
         }
       })
 
-      children.push(job)
+      jobs.push(job)
+    }
+
+    if (jobs.length === 0) {
+      logger.warning('Failed fetching %d target URLs, skipping import jobs', targetUrls.length, lTags())
+      return
     }
 
     // Will update the channel sync status
@@ -74,7 +91,7 @@ export async function synchronizeChannel (options: {
       }
     }
 
-    await JobQueue.Instance.createJobWithChildren(parent, children)
+    await JobQueue.Instance.createJobWithChildren(parent, jobs)
   } catch (err) {
     logger.error(`Failed to import channel ${channel.name}`, { err })
     channelSync.state = VideoChannelSyncState.FAILED
@@ -84,13 +101,14 @@ export async function synchronizeChannel (options: {
 
 // ---------------------------------------------------------------------------
 
-async function skipImport (channel: MChannel, targetUrl: string, onlyAfter?: Date) {
+async function skipImport (channel: MChannel, targetUrl: string, onlyAfter?: Date): Promise<boolean> {
   if (await VideoImportModel.urlAlreadyImported(channel.id, targetUrl)) {
     logger.debug('%s is already imported for channel %s, skipping video channel synchronization.', targetUrl, channel.name)
     return true
   }
 
   if (onlyAfter) {
+    // TODO: skip spawning new process when channel data published at is populated
     const youtubeDL = new YoutubeDLWrapper(
       targetUrl,
       ServerConfigManager.Instance.getEnabledResolutions('vod'),
