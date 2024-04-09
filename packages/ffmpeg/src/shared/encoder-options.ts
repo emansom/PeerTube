@@ -1,5 +1,5 @@
 import { FfmpegCommand } from 'fluent-ffmpeg'
-import { EncoderOptions } from '@peertube/peertube-models'
+import { EncoderOptions, VideoResolution, VideoResolutionType } from '@peertube/peertube-models'
 import { buildStreamSuffix } from '../ffmpeg-utils.js'
 
 export function addDefaultEncoderGlobalParams (command: FfmpegCommand) {
@@ -7,20 +7,18 @@ export function addDefaultEncoderGlobalParams (command: FfmpegCommand) {
   command.outputOption('-max_muxing_queue_size 1024')
          // strip all metadata
          .outputOption('-map_metadata -1')
-         // allows import of source material with incompatible pixel formats (e.g. MJPEG video)
-         .outputOption('-pix_fmt yuv420p')
 }
 
 export function addDefaultEncoderParams (options: {
   command: FfmpegCommand
-  encoder: 'libx264' | string
+  encoder: 'h264_vaapi' | string
   fps: number
 
   streamNum?: number
 }) {
   const { command, encoder, fps, streamNum } = options
 
-  if (encoder === 'libx264') {
+  if (encoder === 'libx264' || encoder === 'h264_vaapi') {
     if (fps) {
       // Keyframe interval of 2 seconds for faster seeking and resolution switching.
       // https://streaminglearningcenter.com/blogs/whats-the-right-keyframe-interval.html
@@ -33,4 +31,26 @@ export function addDefaultEncoderParams (options: {
 export function applyEncoderOptions (command: FfmpegCommand, options: EncoderOptions) {
   command.inputOptions(options.inputOptions ?? [])
     .outputOptions(options.outputOptions ?? [])
+}
+
+export function widthFromResolution(resolution: VideoResolutionType | Number): Number {
+  switch(resolution) {
+    case VideoResolution.H_4K:
+      return 3840;
+    case VideoResolution.H_1440P:
+      return 2560;
+    default:
+    case VideoResolution.H_1080P:
+      return 1920;
+    case VideoResolution.H_720P:
+      return 1280;
+    case VideoResolution.H_480P:
+      return 854;
+    case VideoResolution.H_360P:
+      return 640;
+    case VideoResolution.H_240P:
+      return 426;
+    case VideoResolution.H_144P:
+      return 256;
+  }
 }

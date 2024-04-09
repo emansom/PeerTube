@@ -71,7 +71,7 @@ import { program as cli } from 'commander'
 const app = express().disable('x-powered-by')
 
 // Trust our proxy (IP forwarding...)
-app.set('trust proxy', CONFIG.TRUST_PROXY)
+app.set('trust proxy', true)
 
 app.use((_req, res, next) => {
   // OpenTelemetry

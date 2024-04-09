@@ -92,8 +92,23 @@ export class FFmpegCommandWrapper {
       cwd: this.tmpDirectory
     })
 
+    // TODO: support NVENC, make hwaccel_device configurable (with auto-detect) to allow selection on which GPU it runs
+    // TODO: configurable DRI_PRIME and LIBVA_DRIVER_NAME environment variables for spawned ffmpeg process
+    // https://stackoverflow.com/questions/20825157/using-spawn-function-with-node-env-production
+    // https://stackoverflow.com/questions/7824789/nodejs-set-environment-variable-for-exec
+    // Need to fork/improve/replace fluent-ffmpeg for this
+    // https://github.com/fluent-ffmpeg/node-fluent-ffmpeg/blob/master/lib/ffprobe.js#L155
+    this.command.inputOptions([
+      '-hwaccel vaapi',
+      '-hwaccel_output_format vaapi',
+      // TODO: make configurable from both config via web UI as well as via environment variable and config file for runners
+      // TODO: FFMPEG_HWACCEL_DEVICE
+      // TODO: maybe ffmpeg already supports such enviromment variables?
+      '-hwaccel_device /dev/dri/renderD129'
+    ])
+
     if (this.threads > 0) {
-      // If we don't set any threads ffmpeg will chose automatically
+      // If we don't set any threads ffmpeg will choose automatically
       this.command.outputOption('-threads ' + this.threads)
     }
 
@@ -108,7 +123,10 @@ export class FFmpegCommandWrapper {
     return new Promise<void>((res, rej) => {
       let shellCommand: string
 
-      this.command.on('start', cmdline => { shellCommand = cmdline })
+      this.command.on('start', cmdline => {
+        this.logger.debug(`ffmpeg command: ${cmdline}`)
+        shellCommand = cmdline
+      })
 
       this.command.on('error', (err, stdout, stderr) => {
         if (silent !== true) this.logger.error('Error in ffmpeg.', { stdout, stderr, shellCommand, ...this.lTags })

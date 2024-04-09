@@ -1,6 +1,6 @@
 import { pick } from '@peertube/peertube-core-utils'
 import { FFmpegCommandWrapper } from '../ffmpeg-command-wrapper.js'
-import { getScaleFilter, StreamType } from '../ffmpeg-utils.js'
+import { getScaleFilter, getScaleVAAPIFilter, StreamType } from '../ffmpeg-utils.js'
 import { ffprobePromise, getVideoStreamBitrate, getVideoStreamDimensionsInfo, hasAudioStream } from '../ffprobe.js'
 import { addDefaultEncoderGlobalParams, addDefaultEncoderParams, applyEncoderOptions } from './encoder-options.js'
 
@@ -21,7 +21,7 @@ export async function presetVOD (options: {
   const command = commandWrapper.getCommand()
 
   command.format('mp4')
-    .outputOption('-movflags faststart')
+    .outputOption('-movflags +faststart')
 
   addDefaultEncoderGlobalParams(command)
 
@@ -68,7 +68,14 @@ export async function presetVOD (options: {
       command.videoCodec(builderResult.encoder)
 
       if (scaleFilterValue) {
-        command.outputOption(`-vf ${getScaleFilter(builderResult.result)}=${scaleFilterValue}`)
+        // TODO: NVENC support
+        if (builderResult.encoder === 'h264_vaapi') {
+          // TODO: mode and other settings related to scale_vaapi should be configurable
+          command.outputOption(`-vf hwupload,${getScaleVAAPIFilter(builderResult.result)}=${scaleFilterValue}:mode=hq:format=nv12`)
+        } else if (builderResult.encoder === 'libx264') {
+          // TODO: scaler options should be configurable
+          command.outputOption(`-vf ${getScaleFilter(builderResult.result)}=${scaleFilterValue} -sws_flags lanczos`)
+        }
       }
     } else if (streamType === 'audio') {
       command.audioCodec(builderResult.encoder)

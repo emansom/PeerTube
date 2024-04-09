@@ -7,6 +7,7 @@ import { dirname } from 'path'
 import { FFmpegCommandWrapper, FFmpegCommandWrapperOptions } from './ffmpeg-command-wrapper.js'
 import { ffprobePromise, getVideoStreamDimensionsInfo } from './ffprobe.js'
 import { presetCopy, presetOnlyAudio, presetVOD } from './shared/presets.js'
+import { widthFromResolution } from './shared/index.js'
 
 export type TranscodeVODOptionsType = 'hls' | 'hls-from-ts' | 'quick-transcode' | 'video' | 'merge-audio'
 
@@ -127,8 +128,8 @@ export class FFmpegVOD {
       const videoStreamInfo = await getVideoStreamDimensionsInfo(inputPath, probe)
 
       scaleFilterValue = videoStreamInfo?.isPortraitMode === true
-        ? `w=${resolution}:h=-2`
-        : `w=-2:h=${resolution}`
+        ? `w=${resolution}:h=${widthFromResolution(resolution)}`
+        : `w=${widthFromResolution(resolution)}:h=${resolution}`
     }
 
     await presetVOD({
@@ -149,7 +150,7 @@ export class FFmpegVOD {
     presetCopy(this.commandWrapper)
 
     command.outputOption('-map_metadata -1') // strip all metadata
-      .outputOption('-movflags faststart')
+      .outputOption('-movflags +faststart')
   }
 
   // ---------------------------------------------------------------------------
@@ -172,7 +173,9 @@ export class FFmpegVOD {
       scaleFilterValue: this.getMergeAudioScaleFilterValue()
     })
 
-    command.outputOption('-preset:v veryfast')
+    // TODO: make -preset and -tune configurable
+    // To allow the server administrator to prefer quality vs encoding speed
+    command.outputOption('-preset:v ultrafast')
 
     command.input(options.audioPath)
       .outputOption('-tune stillimage')

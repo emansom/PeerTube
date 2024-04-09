@@ -4,6 +4,11 @@ import { Command, InvalidArgumentError } from '@commander-js/extra-typings'
 import { listRegistered, registerRunner, unregisterRunner } from './register/index.js'
 import { RunnerServer } from './server/index.js'
 import { ConfigManager, logger } from './shared/index.js'
+// import { getFFmpegAccelerators } from '@peertube/peertube-ffmpeg'
+
+// const accelerators = await getFFmpegAccelerators()
+// console.log(accelerators)
+// process.exit(-1)
 
 const program = new Command()
   .version(process.env.PACKAGE_VERSION)

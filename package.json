@@ -173,6 +173,7 @@
     "socket.io": "^4.5.4",
     "sql-formatter": "^15.2.0",
     "srt-to-vtt": "^1.1.2",
+    "systeminformation": "^5.22.6",
     "tslib": "^2.0.0",
     "useragent": "^2.3.0",
     "validator": "^13.0.0",

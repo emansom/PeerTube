@@ -3,7 +3,7 @@ import { FfprobeData, FilterSpecification } from 'fluent-ffmpeg'
 import { join } from 'path'
 import { FFmpegCommandWrapper, FFmpegCommandWrapperOptions } from './ffmpeg-command-wrapper.js'
 import { StreamType, buildStreamSuffix, getScaleFilter } from './ffmpeg-utils.js'
-import { addDefaultEncoderGlobalParams, addDefaultEncoderParams, applyEncoderOptions } from './shared/index.js'
+import { addDefaultEncoderGlobalParams, addDefaultEncoderParams, applyEncoderOptions, widthFromResolution } from './shared/index.js'
 
 export class FFmpegLive {
   private readonly commandWrapper: FFmpegCommandWrapper
@@ -80,35 +80,33 @@ export class FFmpegLive {
         videoType: 'live' as 'live'
       }
 
-      {
-        const streamType: StreamType = 'video'
+      const streamType: StreamType = 'video'
 
-        const builderResult = await this.commandWrapper.getEncoderBuilderResult({ ...baseEncoderBuilderParams, streamType })
-        if (!builderResult) {
-          throw new Error('No available live video encoder found')
-        }
-
-        command.outputOption(`-map [vout${resolution}]`)
-
-        addDefaultEncoderParams({ command, encoder: builderResult.encoder, fps, streamNum: i })
-
-        this.commandWrapper.debugLog(
-          `Apply ffmpeg live video params from ${builderResult.encoder} using ${this.commandWrapper.getProfile()} profile.`,
-          { builderResult, fps, toTranscode }
-        )
-
-        command.outputOption(`${buildStreamSuffix('-c:v', i)} ${builderResult.encoder}`)
-        applyEncoderOptions(command, builderResult.result)
-
-        complexFilter.push({
-          inputs: `vtemp${resolution}`,
-          filter: getScaleFilter(builderResult.result),
-          options: `w=-2:h=${resolution}`,
-          outputs: `vout${resolution}`
-        })
-
-        streamMap.push(`v:${i}`)
+      const builderResult = await this.commandWrapper.getEncoderBuilderResult({ ...baseEncoderBuilderParams, streamType })
+      if (!builderResult) {
+        throw new Error('No available live video encoder found')
       }
+
+      command.outputOption(`-map [vout${resolution}]`)
+
+      addDefaultEncoderParams({ command, encoder: builderResult.encoder, fps, streamNum: i })
+
+      this.commandWrapper.debugLog(
+        `Apply ffmpeg live video params from ${builderResult.encoder} using ${this.commandWrapper.getProfile()} profile.`,
+        { builderResult, fps, toTranscode }
+      )
+
+      command.outputOption(`${buildStreamSuffix('-c:v', i)} ${builderResult.encoder}`)
+      applyEncoderOptions(command, builderResult.result)
+
+      complexFilter.push({
+        inputs: `vtemp${resolution}`,
+        filter: getScaleFilter(builderResult.result),
+        options: `w=${widthFromResolution(resolution)}:h=${resolution}`,
+        outputs: `vout${resolution}`
+      })
+
+      streamMap.push(`v:${i}`)
 
       if (hasAudio) {
         const streamType: StreamType = 'audio'

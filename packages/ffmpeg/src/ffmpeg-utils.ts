@@ -15,3 +15,9 @@ export function getScaleFilter (options: EncoderOptions): string {
 
   return 'scale'
 }
+
+export function getScaleVAAPIFilter (options: EncoderOptions): string {
+  if (options.scaleFilter) return options.scaleFilter.name
+
+  return 'scale_vaapi'
+}
